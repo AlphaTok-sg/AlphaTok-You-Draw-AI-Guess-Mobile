@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Yon Draw & AI Guess</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            overscroll-behavior: none;
+        }
+        #canvas {
+            border: 1px solid #000;
+            background-color: white;
+            touch-action: none;
+        }
+        #responseDialog {
+            height: 240px;
+            overflow-y: auto;
+            border: 1px solid #ccc;
+            padding: 10px;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container mt-5">
+        <h1 class="mb-4">Yon Draw & AI Guess</h1>
+        <div class="row">
+            <div class="col-md-8">
+                <canvas id="canvas" width="800" height="600"></canvas>
+            </div>
+            <div class="col-md-4">
+                <div class="mb-3">
+                    <label for="toolSelect" class="form-label">Select Tool</label>
+                    <select id="toolSelect" class="form-select">
+                        <option value="pencil">Pencil</option>
+                        <option value="line">Line</option>
+                        <option value="circle">Circle</option>
+                        <option value="rectangle">Rectangle</option>
+                        <option value="fill">Fill</option>
+                        <option value="eraser">Eraser</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label for="colorPicker" class="form-label">Select Color</label>
+                    <input type="color" id="colorPicker" class="form-control form-control-color">
+                </div>
+                <div class="mb-3">
+                    <label for="eraserSize" class="form-label">Eraser Size</label>
+                    <input type="range" id="eraserSize" class="form-range" min="1" max="50" value="10">
+                </div>
+                <button id="clearBtn" class="btn btn-danger mb-3">Clear Canvas</button>
+                <button id="undoBtn" class="btn btn-secondary mb-3">Undo</button>
+                <div id="responseDialog" class="mt-3">
+                    <div id="responseContent"></div>
+                </div>
+                <div class="mb-3 mt-3">
+                    <input type="text" id="promptInput" class="form-control" value="What am I drawing?" placeholder="Enter prompt">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const toolSelect = document.getElementById('toolSelect');
+        const colorPicker = document.getElementById('colorPicker');
+        const clearBtn = document.getElementById('clearBtn');
+        const undoBtn = document.getElementById('undoBtn');
+        const eraserSize = document.getElementById('eraserSize');
+        const responseContent = document.getElementById('responseContent');
+        const responseDialog = document.getElementById('responseDialog');
+        const promptInput = document.getElementById('promptInput');
+
+        let isDrawing = false;
+        let startX, startY;
+        let tempCanvas = document.createElement('canvas');
+        let tempCtx = tempCanvas.getContext('2d');
+        tempCanvas.width = canvas.width;
+        tempCanvas.height = canvas.height;
+
+        let history = [];
+        let historyIndex = -1;
+
+        // Set canvas background to white
+        ctx.fillStyle = 'white';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        canvas.addEventListener('mousedown', startDrawing);
+        canvas.addEventListener('mousemove', draw);
+        canvas.addEventListener('mouseup', stopDrawing);
+        canvas.addEventListener('mouseout', stopDrawing);
+        canvas.addEventListener('touchstart', handleTouch);
+        canvas.addEventListener('touchmove', handleTouch);
+        canvas.addEventListener('touchend', stopDrawing);
+        canvas.addEventListener('dblclick', handleDoubleClick);
+        canvas.addEventListener('touchstart', handleDoubleTouch);
+        clearBtn.addEventListener('click', clearCanvas);
+        undoBtn.addEventListener('click', undo);
+
+        function startDrawing(e) {
+            isDrawing = true;
+            [startX, startY] = [e.offsetX, e.offsetY];
+            tempCtx.clearRect(0, 0, tempCanvas.width, tempCanvas.height);
+            tempCtx.drawImage(canvas, 0, 0);
+        }
+
+        function draw(e) {
+            if (!isDrawing) return;
+            const tool = toolSelect.value;
+            ctx.strokeStyle = colorPicker.value;
+            ctx.fillStyle = colorPicker.value;
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(tempCanvas, 0, 0);
+
+            switch (tool) {
+                case 'pencil':
+                    ctx.lineTo(e.offsetX, e.offsetY);
+                    ctx.stroke();
+                    break;
+                case 'line':
+                    ctx.beginPath();
+                    ctx.moveTo(startX, startY);
+                    ctx.lineTo(e.offsetX, e.offsetY);
+                    ctx.stroke();
+                    break;
+                case 'circle':
+                    const radius = Math.sqrt(Math.pow(e.offsetX - startX, 2) + Math.pow(e.offsetY - startY, 2));
+                    ctx.beginPath();
+                    ctx.arc(startX, startY, radius, 0, 2 * Math.PI);
+                    ctx.stroke();
+                    break;
+                case 'rectangle':
+                    ctx.beginPath();
+                    ctx.rect(startX, startY, e.offsetX - startX, e.offsetY - startY);
+                    ctx.stroke();
+                    break;
+                case 'eraser':
+                    ctx.globalCompositeOperation = 'destination-out';
+                    ctx.beginPath();
+                    ctx.arc(e.offsetX, e.offsetY, eraserSize.value, 0, 2 * Math.PI);
+                    ctx.fill();
+                    ctx.globalCompositeOperation = 'source-over';
+                    break;
+            }
+        }
+
+        function stopDrawing() {
+            if (!isDrawing) return;
+            isDrawing = false;
+            ctx.beginPath();
+            tempCtx.clearRect(0, 0, tempCanvas.width, tempCanvas.height);
+            tempCtx.drawImage(canvas, 0, 0);
+            saveToHistory();
+        }
+
+        function handleDoubleClick(e) {
+            if (toolSelect.value === 'fill') {
+                floodFill(e.offsetX, e.offsetY, colorPicker.value);
+                saveToHistory();
+            }
+        }
+
+        function clearCanvas() {
+            ctx.fillStyle = 'white';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            tempCtx.fillStyle = 'white';
+            tempCtx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
+            saveToHistory();
+        }
+
+        function floodFill(x, y, fillColor) {
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const targetColor = getPixelColor(imageData, x, y);
+            const stack = [[x, y]];
+
+            while (stack.length > 0) {
+                const [x, y] = stack.pop();
+                if (x < 0 || x >= canvas.width || y < 0 || y >= canvas.height) continue;
+                if (compareColors(getPixelColor(imageData, x, y), targetColor)) {
+                    setPixelColor(imageData, x, y, fillColor);
+                    stack.push([x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]);
+                }
+            }
+
+            ctx.putImageData(imageData, 0, 0);
+        }
+
+        function getPixelColor(imageData, x, y) {
+            const index = (y * canvas.width + x) * 4;
+            return [
+                imageData.data[index],
+                imageData.data[index + 1],
+                imageData.data[index + 2],
+                imageData.data[index + 3]
+            ];
+        }
+
+        function setPixelColor(imageData, x, y, color) {
+            const index = (y * canvas.width + x) * 4;
+            const [r, g, b] = hexToRgb(color);
+            imageData.data[index] = r;
+            imageData.data[index + 1] = g;
+            imageData.data[index + 2] = b;
+            imageData.data[index + 3] = 255;
+        }
+
+        function compareColors(color1, color2) {
+            return color1[0] === color2[0] && color1[1] === color2[1] && color1[2] === color2[2] && color1[3] === color2[3];
+        }
+
+        function hexToRgb(hex) {
+            const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+            return result ? [
+                parseInt(result[1], 16),
+                parseInt(result[2], 16),
+                parseInt(result[3], 16)
+            ] : null;
+        }
+
+        function saveToHistory() {
+            historyIndex++;
+            history = history.slice(0, historyIndex);
+            history.push(canvas.toDataURL());
+        }
+
+        function undo() {
+            if (historyIndex > 0) {
+                historyIndex--;
+                const img = new Image();
+                img.onload = function() {
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    ctx.drawImage(img, 0, 0);
+                    tempCtx.clearRect(0, 0, tempCanvas.width, tempCanvas.height);
+                    tempCtx.drawImage(img, 0, 0);
+                };
+                img.src = history[historyIndex];
+            }
+        }
+
+        let videoStream = canvas.captureStream(30);
+        let mediaRecorder = new MediaRecorder(videoStream);
+        let chunks = [];
+        let startTime = Date.now();
+
+        mediaRecorder.ondataavailable = function(e) {
+            chunks.push(e.data);
+        };
+
+        mediaRecorder.onstop = function(e) {
+            var blob = new Blob(chunks, { 'type' : 'video/webm' });
+            chunks = [];
+            sendVideoToBackend(blob);
+        };
+
+        function sendVideoToBackend(blob) {
+            const formData = new FormData();
+            formData.append('video', blob, 'drawing.webm');
+            formData.append('question', promptInput.value);
+
+            fetch('https://7fb1-115-66-5-192.ngrok-free.app/video_stream', {
+                method: 'POST',
+                body: formData
+            }).then(response => {
+                if (response.ok) {
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder();
+
+                    function readChunk() {
+                        reader.read().then(({ done, value }) => {
+                            if (done) {
+                                console.log("Analysis completed");
+                                return;
+                            }
+                            const textChunk = decoder.decode(value, { stream: true });
+                            const lines = textChunk.split('\n');
+                            lines.forEach(line => {
+                                if (line.trim()) {
+                                    try {
+                                        const result = JSON.parse(line);
+                                        updateResponseDialog(result.text);
+                                    } catch (e) {
+                                        console.error('Error parsing JSON:', e);
+                                    }
+                                }
+                            });
+                            readChunk();
+                        }).catch(error => {
+                            console.error('Error reading video stream:', error);
+                        });
+                    }
+
+                    if (responseContent.innerHTML !== "" && !responseContent.innerHTML.endsWith("<br><br>")) {
+                        responseContent.innerHTML += "<br><br>";
+                    }
+
+                    readChunk();
+                } else {
+                    throw new Error('Failed to send video segment');
+                }
+            }).catch(error => {
+                console.error('Error sending video segment:', error);
+                if (responseContent.innerHTML !== "" && !responseContent.innerHTML.endsWith("<br><br>")) {
+                    responseContent.innerHTML += "<br><br>";
+                }
+                updateResponseDialog('Error sending video segment: ' + error.message);
+                
+            });
+        }
+
+        function updateResponseDialog(message) {
+            if(message !== undefined){
+                responseContent.innerHTML += message;
+                responseDialog.scrollTop = responseDialog.scrollHeight;
+            }
+        }
+
+        setInterval(function() {
+            const currentTime = Date.now();
+            const elapsedTime = currentTime - startTime;
+            
+            if (elapsedTime >= 30000) {
+                mediaRecorder.stop();
+                startTime = currentTime;
+                mediaRecorder = new MediaRecorder(videoStream);
+                mediaRecorder.ondataavailable = function(e) {
+                    chunks.push(e.data);
+                };
+                mediaRecorder.onstop = function(e) {
+                    var blob = new Blob(chunks, { 'type' : 'video/mp4' });
+                    chunks = [];
+                    sendVideoToBackend(blob);
+                };
+                mediaRecorder.start();
+            } else if (elapsedTime >= 10000 && chunks.length === 0) {
+                mediaRecorder.stop();
+                startTime = currentTime - 10000;  // Keep the previous 10 seconds of recording
+                mediaRecorder = new MediaRecorder(videoStream);
+                mediaRecorder.ondataavailable = function(e) {
+                    chunks.push(e.data);
+                };
+                mediaRecorder.onstop = function(e) {
+                    var blob = new Blob(chunks, { 'type' : 'video/mp4' });
+                    chunks = [];
+                    sendVideoToBackend(blob);
+                };
+                mediaRecorder.start();
+            }
+        }, 6000);
+
+        mediaRecorder.start();
+        saveToHistory();
+
+        // 添加触摸事件处理函数
+        function handleTouch(e) {
+            e.preventDefault();
+            const touch = e.touches[0];
+            const mouseEvent = new MouseEvent(e.type === 'touchstart' ? 'mousedown' : 'mousemove', {
+                clientX: touch.clientX,
+                clientY: touch.clientY
+            });
+            canvas.dispatchEvent(mouseEvent);
+        }
+
+        function handleDoubleTouch(e) {
+            e.preventDefault();
+            if (e.touches.length === 1) {
+                const touch = e.touches[0];
+                const mouseEvent = new MouseEvent('dblclick', {
+                    clientX: touch.clientX,
+                    clientY: touch.clientY
+                });
+                canvas.dispatchEvent(mouseEvent);
+            }
+        }
+
+        // 调整 canvas 大小以适应移动设备屏幕
+        function resizeCanvas() {
+            const containerWidth = canvas.parentElement.clientWidth;
+            const scale = containerWidth / canvas.width;
+            canvas.style.width = `${containerWidth}px`;
+            canvas.style.height = `${canvas.height * scale}px`;
+        }
+
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+    </script>
+</body>
+</html>
